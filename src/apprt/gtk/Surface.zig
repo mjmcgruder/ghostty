@@ -1867,6 +1867,52 @@ pub fn keyEvent(
         if (entry.native == keycode) break :keycode entry.key;
     } else .unidentified;
 
+    // If we're not in a dead key state, we want to translate our text
+    // to some input.Key.
+    const key = if (!self.im_composing) key: {
+        // First, try to convert the keyval directly to a key. This allows the
+        // use of key remapping and identification of keypad numerics (as
+        // opposed to their ASCII counterparts)
+        if (gtk_key.keyFromKeyval(keyval)) |key| {
+            break :key key;
+        }
+
+        // A completed key. If the length of the key is one then we can
+        // attempt to translate it to a key enum and call the key
+        // callback. First try plain ASCII.
+        if (self.im_len > 0) {
+            if (input.Key.fromASCII(self.im_buf[0])) |key| {
+                break :key key;
+            }
+        }
+
+        // If that doesn't work then we try to translate the kevval..
+        if (keyval_unicode != 0) {
+            if (std.math.cast(u8, keyval_unicode)) |byte| {
+                if (input.Key.fromASCII(byte)) |key| {
+                    break :key key;
+                }
+            }
+        }
+
+        // If that doesn't work we use the unshifted value...
+        if (std.math.cast(u8, keyval_unicode_unshifted)) |ascii| {
+            if (input.Key.fromASCII(ascii)) |key| {
+                break :key key;
+            }
+        }
+
+        // If we have im text then this is invalid. This means that
+        // the keypress generated some character that we don't know about
+        // in our key enum. We don't want to use the physical key because
+        // it can be simply wrong. For example on "Turkish Q" the "i" key
+        // on a US layout results in "ı" which is not the same as "i" so
+        // we shouldn't use the physical key.
+        if (self.im_len > 0 or keyval_unicode_unshifted != 0) break :key .unidentified;
+
+        break :key physical_key;
+    } else .unidentified;
+
     // Get our modifier for the event
     const mods: input.Mods = gtk_key.eventMods(
         event,
@@ -1915,7 +1961,7 @@ pub fn keyEvent(
     // Invoke the core Ghostty logic to handle this input.
     const effect = self.core_surface.keyCallback(.{
         .action = action,
-        .key = physical_key,
+        .key = key,
         .mods = mods,
         .consumed_mods = consumed_mods,
         .composing = self.im_composing,
